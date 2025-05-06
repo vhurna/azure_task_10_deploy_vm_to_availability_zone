@@ -22,15 +22,15 @@ $nsgRuleHTTP = New-AzNetworkSecurityRuleConfig -Name HTTP  -Protocol Tcp -Direct
     -SourceAddressPrefix * -SourcePortRange * `
     -DestinationAddressPrefix * -DestinationPortRange 8080 -Access Allow
 
-New-AzNetworkSecurityGroup `
+$nsg = New-AzNetworkSecurityGroup `
   -Name $networkSecurityGroupName `
   -ResourceGroupName $resourceGroupName `
   -Location $location `
   -SecurityRules $nsgRuleSSH, $nsgRuleHTTP
 
 Write-Host "Creating VNet '$virtualNetworkName' with subnet '$subnetName'..."
-$subnet = New-AzVirtualNetworkSubnetConfig -Name $subnetName -AddressPrefix $subnetAddressPrefix
-New-AzVirtualNetwork `
+$subnet = New-AzVirtualNetworkSubnetConfig -Name $subnetName -AddressPrefix $subnetAddressPrefix -NetworkSecurityGroup $nsg
+$vnet = New-AzVirtualNetwork `
   -Name $virtualNetworkName `
   -ResourceGroupName $resourceGroupName `
   -Location $location `
@@ -45,26 +45,44 @@ New-AzSshKey `
 
 # ────────────── Deploy TWO Linux VMs ──────────────
 
+Write-Host "Creating network interfaces for VMs..."
+$subnet = Get-AzVirtualNetworkSubnetConfig -VirtualNetwork $vnet -Name $subnetName
+
+# Create NIC for VM 1
+$nic1 = New-AzNetworkInterface `
+    -Name "${vmNameBase}-nic-1" `
+    -ResourceGroupName $resourceGroupName `
+    -Location $location `
+    -Subnet $subnet `
+    -NetworkSecurityGroup $nsg
+
+# Create NIC for VM 2
+$nic2 = New-AzNetworkInterface `
+    -Name "${vmNameBase}-nic-2" `
+    -ResourceGroupName $resourceGroupName `
+    -Location $location `
+    -Subnet $subnet `
+    -NetworkSecurityGroup $nsg
+
 $commonVmParams = @{
     ResourceGroupName   = $resourceGroupName
     Location            = $location
-    VirtualNetworkName  = $virtualNetworkName
-    SubnetName          = $subnetName
-    SecurityGroupName   = $networkSecurityGroupName
     Image               = $vmImage
     Size                = $vmSize
     SshKeyName          = $sshKeyName
-    # Видалено DisablePasswordAuthentication
+    GenerateSshKey      = $false
 }
 
 Write-Host "Deploying VM '$vmNameBase-1' in zone 1..."
 New-AzVm @commonVmParams `
-  -Name "${vmNameBase}-1" `
-  -Zone 1
+    -Name "${vmNameBase}-1" `
+    -Zone 1 `
+    -NetworkInterfaceId $nic1.Id
 
 Write-Host "Deploying VM '$vmNameBase-2' in zone 2..."
 New-AzVm @commonVmParams `
-  -Name "${vmNameBase}-2" `
-  -Zone 2
+    -Name "${vmNameBase}-2" `
+    -Zone 2 `
+    -NetworkInterfaceId $nic2.Id
 
 Write-Host "`n✅ Successfully deployed two VMs ($vmNameBase-1, $vmNameBase-2) across Availability Zones 1 & 2."
